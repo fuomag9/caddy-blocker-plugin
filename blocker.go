@@ -152,9 +152,49 @@ func (b *Blocker) Cleanup() error {
 	return nil
 }
 
-// ServeHTTP placeholder — replaced in Task 7.
+// ServeHTTP implements caddyhttp.MiddlewareHandler.
+// Allow rules take full precedence — if any allow rule matches, the request
+// passes to the next handler regardless of any block rules.
 func (b *Blocker) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	clientIP := b.extractClientIP(r)
+
+	if b.isAllowed(clientIP) {
+		return next.ServeHTTP(w, r)
+	}
+
+	if b.isBlocked(clientIP) {
+		b.writeBlockResponse(w, r)
+		return nil
+	}
+
 	return next.ServeHTTP(w, r)
+}
+
+// writeBlockResponse writes the configured block response to w.
+// If RedirectURL is set, it issues a 302. Otherwise it writes the configured
+// status code, headers, and body.
+func (b *Blocker) writeBlockResponse(w http.ResponseWriter, r *http.Request) {
+	if b.RedirectURL != "" {
+		http.Redirect(w, r, b.RedirectURL, http.StatusFound)
+		return
+	}
+
+	for k, v := range b.ResponseHeaders {
+		w.Header().Set(k, v)
+	}
+
+	status := b.ResponseStatus
+	if status == 0 {
+		status = http.StatusForbidden
+	}
+
+	body := b.ResponseBody
+	if body == "" {
+		body = "Forbidden"
+	}
+
+	w.WriteHeader(status)
+	_, _ = fmt.Fprint(w, body)
 }
 
 // Interface assertions — fail at compile time if Blocker breaks any contract.

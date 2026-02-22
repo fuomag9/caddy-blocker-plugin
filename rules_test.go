@@ -102,3 +102,95 @@ func TestExtractClientIP_ipv6(t *testing.T) {
 		t.Errorf("want 2001:db8::1, got %v", ip)
 	}
 }
+
+func TestMatchesRules_ipExactMatch(t *testing.T) {
+	b := &Blocker{}
+	b.blockIPs = []net.IP{net.ParseIP("1.2.3.4")}
+
+	if !b.isBlocked(net.ParseIP("1.2.3.4")) {
+		t.Error("want 1.2.3.4 to be blocked")
+	}
+	if b.isBlocked(net.ParseIP("1.2.3.5")) {
+		t.Error("want 1.2.3.5 to not be blocked")
+	}
+}
+
+func TestMatchesRules_cidrMatch(t *testing.T) {
+	b := &Blocker{}
+	_, ipNet, _ := net.ParseCIDR("10.0.0.0/8")
+	b.blockCIDRs = []*net.IPNet{ipNet}
+
+	if !b.isBlocked(net.ParseIP("10.5.5.5")) {
+		t.Error("want 10.5.5.5 to be blocked (inside 10.0.0.0/8)")
+	}
+	if b.isBlocked(net.ParseIP("11.0.0.1")) {
+		t.Error("want 11.0.0.1 to not be blocked")
+	}
+}
+
+func TestMatchesRules_asnMatch(t *testing.T) {
+	b := &Blocker{}
+	b.BlockASNs = []uint{12345}
+	b.asnDB = &mockASNReader{asn: 12345}
+
+	if !b.isBlocked(net.ParseIP("1.2.3.4")) {
+		t.Error("want IP with ASN 12345 to be blocked")
+	}
+}
+
+func TestMatchesRules_asnMatch_nilDB(t *testing.T) {
+	b := &Blocker{}
+	b.BlockASNs = []uint{12345}
+	b.asnDB = nil
+
+	if b.isBlocked(net.ParseIP("1.2.3.4")) {
+		t.Error("want fail-open when asnDB is nil")
+	}
+}
+
+func TestMatchesRules_countryMatch(t *testing.T) {
+	b := &Blocker{}
+	b.BlockCountries = []string{"CN"}
+	b.geoipDB = &mockCountryReader{isoCode: "CN"}
+
+	if !b.isBlocked(net.ParseIP("1.2.3.4")) {
+		t.Error("want IP from CN to be blocked")
+	}
+}
+
+func TestMatchesRules_continentMatch(t *testing.T) {
+	b := &Blocker{}
+	b.BlockContinents = []string{"AS"}
+	b.geoipDB = &mockCountryReader{continentCode: "AS"}
+
+	if !b.isBlocked(net.ParseIP("1.2.3.4")) {
+		t.Error("want IP from AS continent to be blocked")
+	}
+}
+
+func TestMatchesRules_allowWinsOverBlock(t *testing.T) {
+	b := &Blocker{}
+	b.BlockASNs = []uint{12345}
+	b.asnDB = &mockASNReader{asn: 12345}
+	b.allowIPs = []net.IP{net.ParseIP("1.2.3.4")}
+
+	if !b.isAllowed(net.ParseIP("1.2.3.4")) {
+		t.Error("want 1.2.3.4 to be allowed")
+	}
+}
+
+func TestMatchesRules_nilIP(t *testing.T) {
+	b := &Blocker{}
+	b.blockIPs = []net.IP{net.ParseIP("1.2.3.4")}
+	if b.isBlocked(nil) {
+		t.Error("nil IP should not match any rule")
+	}
+}
+
+func TestMatchesRules_ipv6Match(t *testing.T) {
+	b := &Blocker{}
+	b.blockIPs = []net.IP{net.ParseIP("2001:db8::1")}
+	if !b.isBlocked(net.ParseIP("2001:db8::1")) {
+		t.Error("want IPv6 address to be blocked")
+	}
+}

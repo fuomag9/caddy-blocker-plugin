@@ -2,6 +2,7 @@ package caddyblocker
 
 import (
 	"net"
+	"net/http"
 	"testing"
 )
 
@@ -53,5 +54,51 @@ func TestCompileCIDRsAndIPs_ipv6CIDR(t *testing.T) {
 	testIP := net.ParseIP("2001:db8::1")
 	if !cidrs[0].Contains(testIP) {
 		t.Errorf("want CIDR to contain 2001:db8::1")
+	}
+}
+
+func TestExtractClientIP_directConnection(t *testing.T) {
+	b := &Blocker{}
+	r := &http.Request{RemoteAddr: "1.2.3.4:5678"}
+	ip := b.extractClientIP(r)
+	if !ip.Equal(net.ParseIP("1.2.3.4")) {
+		t.Errorf("want 1.2.3.4, got %v", ip)
+	}
+}
+
+func TestExtractClientIP_trustedProxyXFF(t *testing.T) {
+	b := &Blocker{}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
+
+	r := &http.Request{
+		RemoteAddr: "127.0.0.1:1234",
+		Header:     http.Header{"X-Forwarded-For": []string{"5.6.7.8, 127.0.0.1"}},
+	}
+	ip := b.extractClientIP(r)
+	if !ip.Equal(net.ParseIP("5.6.7.8")) {
+		t.Errorf("want 5.6.7.8, got %v", ip)
+	}
+}
+
+func TestExtractClientIP_noXFFHeader(t *testing.T) {
+	b := &Blocker{}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
+
+	r := &http.Request{
+		RemoteAddr: "127.0.0.1:1234",
+		Header:     http.Header{},
+	}
+	ip := b.extractClientIP(r)
+	if !ip.Equal(net.ParseIP("127.0.0.1")) {
+		t.Errorf("want 127.0.0.1, got %v", ip)
+	}
+}
+
+func TestExtractClientIP_ipv6(t *testing.T) {
+	b := &Blocker{}
+	r := &http.Request{RemoteAddr: "[2001:db8::1]:5678"}
+	ip := b.extractClientIP(r)
+	if !ip.Equal(net.ParseIP("2001:db8::1")) {
+		t.Errorf("want 2001:db8::1, got %v", ip)
 	}
 }

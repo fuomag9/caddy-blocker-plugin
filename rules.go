@@ -32,9 +32,36 @@ func compileCIDRsAndIPs(cidrStrings []string, ipStrings []string) ([]*net.IPNet,
 	return cidrs, ips, nil
 }
 
+// parseMixedIPsAndCIDRs accepts a slice of strings where each entry is either
+// a plain IP address (e.g. "127.0.0.1") or a CIDR range (e.g. "10.0.0.0/8").
+// Returns separate slices of compiled CIDRs and IPs.
+func parseMixedIPsAndCIDRs(entries []string) ([]*net.IPNet, []net.IP, error) {
+	var cidrs []*net.IPNet
+	var ips []net.IP
+
+	for _, s := range entries {
+		if strings.Contains(s, "/") {
+			_, ipNet, err := net.ParseCIDR(s)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid CIDR %q: %w", s, err)
+			}
+			cidrs = append(cidrs, ipNet)
+		} else {
+			ip := net.ParseIP(s)
+			if ip == nil {
+				return nil, nil, fmt.Errorf("invalid IP address %q", s)
+			}
+			ips = append(ips, ip)
+		}
+	}
+
+	return cidrs, ips, nil
+}
+
 // extractClientIP returns the best-effort real client IP for the request.
 // If RemoteAddr is from a trusted proxy, it walks X-Forwarded-For left-to-right
 // and returns the first IP that is not itself a trusted proxy.
+// Returns nil if the client IP is indeterminate (fail-open).
 func (b *Blocker) extractClientIP(r *http.Request) net.IP {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -46,12 +73,20 @@ func (b *Blocker) extractClientIP(r *http.Request) net.IP {
 		xff := r.Header.Get("X-Forwarded-For")
 		if xff != "" {
 			for _, part := range strings.Split(xff, ",") {
-				ip := net.ParseIP(strings.TrimSpace(part))
+				// Handle optional port in XFF entries (some proxy implementations include it)
+				candidate := strings.TrimSpace(part)
+				if h, _, e := net.SplitHostPort(candidate); e == nil {
+					candidate = h
+				}
+				ip := net.ParseIP(candidate)
 				if ip != nil && !b.isTrustedProxy(ip) {
 					return ip
 				}
 			}
 		}
+		// All XFF entries were trusted proxies or no XFF header present.
+		// Return nil — indeterminate client IP, caller treats as no-match (fail-open).
+		return nil
 	}
 	return remoteIP
 }

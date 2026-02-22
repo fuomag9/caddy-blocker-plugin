@@ -81,6 +81,7 @@ func TestExtractClientIP_trustedProxyXFF(t *testing.T) {
 }
 
 func TestExtractClientIP_noXFFHeader(t *testing.T) {
+	// Trusted proxy but no XFF header — client IP is indeterminate, return nil
 	b := &Blocker{}
 	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
 
@@ -89,8 +90,8 @@ func TestExtractClientIP_noXFFHeader(t *testing.T) {
 		Header:     http.Header{},
 	}
 	ip := b.extractClientIP(r)
-	if !ip.Equal(net.ParseIP("127.0.0.1")) {
-		t.Errorf("want 127.0.0.1, got %v", ip)
+	if ip != nil {
+		t.Errorf("want nil for indeterminate client IP, got %v", ip)
 	}
 }
 
@@ -100,6 +101,56 @@ func TestExtractClientIP_ipv6(t *testing.T) {
 	ip := b.extractClientIP(r)
 	if !ip.Equal(net.ParseIP("2001:db8::1")) {
 		t.Errorf("want 2001:db8::1, got %v", ip)
+	}
+}
+
+func TestExtractClientIP_allXFFTrusted_returnsNil(t *testing.T) {
+	b := &Blocker{}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")}
+
+	// All XFF entries are trusted — should return nil (indeterminate)
+	r := &http.Request{
+		RemoteAddr: "127.0.0.1:1234",
+		Header:     http.Header{"X-Forwarded-For": []string{"10.0.0.1, 127.0.0.1"}},
+	}
+	ip := b.extractClientIP(r)
+	if ip != nil {
+		t.Errorf("want nil when all XFF entries are trusted, got %v", ip)
+	}
+}
+
+func TestExtractClientIP_xffWithPort(t *testing.T) {
+	b := &Blocker{}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
+
+	// Some proxies include port in XFF — should still parse correctly
+	r := &http.Request{
+		RemoteAddr: "127.0.0.1:1234",
+		Header:     http.Header{"X-Forwarded-For": []string{"5.6.7.8:9999, 127.0.0.1"}},
+	}
+	ip := b.extractClientIP(r)
+	if !ip.Equal(net.ParseIP("5.6.7.8")) {
+		t.Errorf("want 5.6.7.8 (port stripped), got %v", ip)
+	}
+}
+
+func TestParseMixedIPsAndCIDRs_plainIPsAndCIDRs(t *testing.T) {
+	cidrs, ips, err := parseMixedIPsAndCIDRs([]string{"127.0.0.1", "10.0.0.0/8", "::1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cidrs) != 1 {
+		t.Errorf("want 1 CIDR, got %d", len(cidrs))
+	}
+	if len(ips) != 2 {
+		t.Errorf("want 2 IPs, got %d", len(ips))
+	}
+}
+
+func TestParseMixedIPsAndCIDRs_invalidEntry(t *testing.T) {
+	_, _, err := parseMixedIPsAndCIDRs([]string{"not-valid"})
+	if err == nil {
+		t.Fatal("expected error for invalid entry")
 	}
 }
 

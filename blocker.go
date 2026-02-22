@@ -93,7 +93,7 @@ func (b *Blocker) Provision(ctx caddy.Context) error {
 	if err != nil {
 		return fmt.Errorf("allow rules: %w", err)
 	}
-	b.trustedCIDRs, b.trustedIPs, err = compileCIDRsAndIPs(b.TrustedProxies, nil)
+	b.trustedCIDRs, b.trustedIPs, err = parseMixedIPsAndCIDRs(b.TrustedProxies)
 	if err != nil {
 		return fmt.Errorf("trusted_proxies: %w", err)
 	}
@@ -136,6 +136,17 @@ func (b *Blocker) Validate() error {
 		if asn == 0 {
 			return fmt.Errorf("ASN numbers must be > 0")
 		}
+	}
+
+	// Validate CIDR and IP strings in block/allow rules
+	if _, _, err := compileCIDRsAndIPs(b.BlockCIDRs, b.BlockIPs); err != nil {
+		return fmt.Errorf("block rules: %w", err)
+	}
+	if _, _, err := compileCIDRsAndIPs(b.AllowCIDRs, b.AllowIPs); err != nil {
+		return fmt.Errorf("allow rules: %w", err)
+	}
+	if _, _, err := parseMixedIPsAndCIDRs(b.TrustedProxies); err != nil {
+		return fmt.Errorf("trusted_proxies: %w", err)
 	}
 
 	return nil

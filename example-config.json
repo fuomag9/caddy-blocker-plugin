@@ -1,0 +1,40 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":8080"],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "blocker",
+                  "geoip_db": "/usr/share/GeoIP/GeoLite2-Country.mmdb",
+                  "asn_db": "/usr/share/GeoIP/GeoLite2-ASN.mmdb",
+                  "block_countries": ["CN", "RU", "KP"],
+                  "block_continents": ["AF"],
+                  "block_asns": [12345],
+                  "block_cidrs": ["192.0.2.0/24"],
+                  "block_ips": ["198.51.100.1"],
+                  "allow_ips": ["1.2.3.4"],
+                  "allow_cidrs": ["10.0.0.0/8"],
+                  "trusted_proxies": ["127.0.0.1"],
+                  "response_status": 403,
+                  "response_body": "<h1>Access Denied</h1>",
+                  "response_headers": {
+                    "Content-Type": "text/html; charset=utf-8"
+                  }
+                },
+                {
+                  "handler": "static_response",
+                  "body": "Hello, world!",
+                  "status_code": 200
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

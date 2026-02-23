@@ -1,4 +1,4 @@
-module caddy-blocker-plugin
+module github.com/fuomag9/caddy-blocker-plugin
 
 go 1.26
 

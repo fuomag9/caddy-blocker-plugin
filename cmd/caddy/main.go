@@ -8,7 +8,7 @@ import (
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 
 	// Load the blocker plugin (registers http.handlers.blocker via init()).
-	_ "caddy-blocker-plugin"
+	_ "github.com/fuomag9/caddy-blocker-plugin"
 )
 
 func main() {

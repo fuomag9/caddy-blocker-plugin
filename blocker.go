@@ -17,28 +17,86 @@ func init() {
 	caddy.RegisterModule(Blocker{})
 }
 
-// Blocker is a Caddy HTTP middleware that blocks or allows requests
-// based on IP, CIDR, ASN, country, and continent rules.
+// Blocker is a Caddy HTTP middleware that blocks or allows requests based on
+// IP address, CIDR range, ASN, country, and continent. Allow rules always take
+// precedence over block rules, enabling fine-grained exceptions (e.g. block an
+// entire country but whitelist specific IPs from it).
+//
+// Geo and ASN lookups require MaxMind GeoLite2/GeoIP2 .mmdb database files.
+// If a database is missing or unreadable, the corresponding rule types are
+// silently skipped (fail-open) and all other rules continue to apply.
 type Blocker struct {
-	// --- Configurable fields (JSON) ---
-	GeoIPDBPath     string            `json:"geoip_db,omitempty"`
-	ASNDBPath       string            `json:"asn_db,omitempty"`
-	BlockCountries  []string          `json:"block_countries,omitempty"`
-	BlockContinents []string          `json:"block_continents,omitempty"`
-	BlockASNs       []uint            `json:"block_asns,omitempty"`
-	BlockCIDRs      []string          `json:"block_cidrs,omitempty"`
-	BlockIPs        []string          `json:"block_ips,omitempty"`
-	AllowCountries  []string          `json:"allow_countries,omitempty"`
-	AllowContinents []string          `json:"allow_continents,omitempty"`
-	AllowASNs       []uint            `json:"allow_asns,omitempty"`
-	AllowCIDRs      []string          `json:"allow_cidrs,omitempty"`
-	AllowIPs        []string          `json:"allow_ips,omitempty"`
-	TrustedProxies  []string          `json:"trusted_proxies,omitempty"`
-	FailClosed      bool              `json:"fail_closed,omitempty"`
-	ResponseStatus  int               `json:"response_status,omitempty"`
-	ResponseBody    string            `json:"response_body,omitempty"`
+	// GeoIPDBPath is the path to a MaxMind GeoLite2-Country, GeoLite2-City,
+	// GeoIP2-Country, or GeoIP2-City .mmdb file. Required for block_countries
+	// and block_continents / allow_countries and allow_continents rules.
+	GeoIPDBPath string `json:"geoip_db,omitempty"`
+
+	// ASNDBPath is the path to a MaxMind GeoLite2-ASN or GeoIP2-ASN .mmdb
+	// file. Required for block_asns / allow_asns rules.
+	ASNDBPath string `json:"asn_db,omitempty"`
+
+	// BlockCountries lists ISO 3166-1 alpha-2 country codes whose traffic
+	// should be blocked (e.g. ["CN", "RU", "KP"]).
+	BlockCountries []string `json:"block_countries,omitempty"`
+
+	// BlockContinents lists MaxMind continent codes whose traffic should be
+	// blocked. Valid values: AF, AN, AS, EU, NA, OC, SA.
+	BlockContinents []string `json:"block_continents,omitempty"`
+
+	// BlockASNs lists Autonomous System Numbers whose traffic should be blocked.
+	BlockASNs []uint `json:"block_asns,omitempty"`
+
+	// BlockCIDRs lists CIDR ranges whose traffic should be blocked
+	// (e.g. ["192.0.2.0/24", "2001:db8::/32"]).
+	BlockCIDRs []string `json:"block_cidrs,omitempty"`
+
+	// BlockIPs lists individual IP addresses to block.
+	BlockIPs []string `json:"block_ips,omitempty"`
+
+	// AllowCountries, AllowContinents, AllowASNs, AllowCIDRs, AllowIPs mirror
+	// their Block counterparts but grant access. Allow rules are evaluated
+	// before block rules — a matching allow rule always passes the request
+	// through, regardless of any block rules that would otherwise match.
+	AllowCountries  []string `json:"allow_countries,omitempty"`
+	AllowContinents []string `json:"allow_continents,omitempty"`
+	AllowASNs       []uint   `json:"allow_asns,omitempty"`
+	AllowCIDRs      []string `json:"allow_cidrs,omitempty"`
+	AllowIPs        []string `json:"allow_ips,omitempty"`
+
+	// TrustedProxies lists IPs or CIDRs of trusted reverse proxies
+	// (e.g. ["127.0.0.1", "10.0.0.0/8"]). When the direct connection arrives
+	// from a trusted proxy, the real client IP is resolved from
+	// X-Forwarded-For by walking the header right-to-left and returning the
+	// first hop not in this list. Both plain IPs and CIDR notation are accepted.
+	TrustedProxies []string `json:"trusted_proxies,omitempty"`
+
+	// FailClosed controls behaviour when the real client IP cannot be
+	// determined (e.g. the connection is from a trusted proxy but
+	// X-Forwarded-For contains no usable non-proxy address).
+	//
+	// false (default): the request is passed through (fail-open).
+	// true:            the request is blocked with the configured block response.
+	//
+	// Set this to true in high-security environments where an indeterminate
+	// client IP should never be allowed through.
+	FailClosed bool `json:"fail_closed,omitempty"`
+
+	// ResponseStatus is the HTTP status code returned to blocked clients.
+	// Defaults to 403 if unset. Ignored when redirect_url is set.
+	ResponseStatus int `json:"response_status,omitempty"`
+
+	// ResponseBody is the response body returned to blocked clients.
+	// Defaults to "Forbidden" if unset. Ignored when redirect_url is set.
+	ResponseBody string `json:"response_body,omitempty"`
+
+	// ResponseHeaders are extra HTTP headers added to block responses
+	// (e.g. {"Content-Type": "text/html; charset=utf-8"}).
+	// Ignored when redirect_url is set.
 	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
-	RedirectURL     string            `json:"redirect_url,omitempty"`
+
+	// RedirectURL, when set, causes blocked requests to receive a 302
+	// redirect to this URL instead of the status/body/headers response.
+	RedirectURL string `json:"redirect_url,omitempty"`
 
 	// --- Compiled state (set by Provision, not exported) ---
 	logger       *zap.Logger
@@ -164,9 +222,13 @@ func (b *Blocker) Cleanup() error {
 	return nil
 }
 
-// ServeHTTP implements caddyhttp.MiddlewareHandler.
-// Allow rules take full precedence — if any allow rule matches, the request
-// passes to the next handler regardless of any block rules.
+// ServeHTTP implements caddyhttp.MiddlewareHandler. Evaluation order:
+//
+//  1. Extract the real client IP (respecting trusted_proxies / X-Forwarded-For).
+//  2. If the client IP is indeterminate and fail_closed is true, block.
+//  3. If any allow rule matches, pass the request to the next handler immediately.
+//  4. If any block rule matches, return the configured block response.
+//  5. Default: pass through.
 func (b *Blocker) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP := b.extractClientIP(r)
 	if clientIP == nil && b.FailClosed {

@@ -32,9 +32,10 @@ func compileCIDRsAndIPs(cidrStrings []string, ipStrings []string) ([]*net.IPNet,
 	return cidrs, ips, nil
 }
 
-// parseMixedIPsAndCIDRs accepts a slice of strings where each entry is either
-// a plain IP address (e.g. "127.0.0.1") or a CIDR range (e.g. "10.0.0.0/8").
-// Returns separate slices of compiled CIDRs and IPs.
+// parseMixedIPsAndCIDRs parses a slice of strings where each entry is either a
+// plain IP address (e.g. "127.0.0.1") or a CIDR range (e.g. "10.0.0.0/8").
+// Entries containing "/" are treated as CIDRs; all others as plain IPs.
+// Used for trusted_proxies, which commonly contains a mix of both forms.
 func parseMixedIPsAndCIDRs(entries []string) ([]*net.IPNet, []net.IP, error) {
 	var cidrs []*net.IPNet
 	var ips []net.IP
@@ -58,10 +59,20 @@ func parseMixedIPsAndCIDRs(entries []string) ([]*net.IPNet, []net.IP, error) {
 	return cidrs, ips, nil
 }
 
-// extractClientIP returns the best-effort real client IP for the request.
-// If RemoteAddr is from a trusted proxy, it walks X-Forwarded-For right-to-left
-// and returns the first IP that is not itself a trusted proxy.
-// Returns nil if the client IP is indeterminate (fail-open).
+// extractClientIP returns the real client IP for the request.
+//
+// If the direct connection (RemoteAddr) is not a trusted proxy, that address
+// is returned as-is.
+//
+// When RemoteAddr is a trusted proxy, the X-Forwarded-For header is walked
+// right-to-left. The rightmost entry is the one appended by the last proxy
+// (which you control), making it the hardest to spoof. The first entry from
+// the right that is not in trusted_proxies is the real client. This prevents
+// a client from bypassing a block by prepending a spoofed IP to XFF.
+//
+// Returns nil when the client IP cannot be determined (e.g. the direct
+// connection is a trusted proxy but XFF is absent or all its entries are also
+// trusted proxies). The caller handles nil according to fail_closed.
 func (b *Blocker) extractClientIP(r *http.Request) net.IP {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -87,6 +98,10 @@ func (b *Blocker) extractClientIP(r *http.Request) net.IP {
 	return remoteIP
 }
 
+// parseForwardedIP parses a single comma-separated field from an
+// X-Forwarded-For header. It trims whitespace and strips an optional port
+// suffix (some proxy implementations include port numbers, e.g. "1.2.3.4:567").
+// Returns nil if the field is empty or cannot be parsed as an IP address.
 func parseForwardedIP(part string) net.IP {
 	candidate := strings.TrimSpace(part)
 	if candidate == "" {

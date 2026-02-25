@@ -111,6 +111,65 @@ func TestServeHTTP_blockedIP_returns403(t *testing.T) {
 	}
 }
 
+func TestServeHTTP_trustedProxySpoofedXFF_usesRightmostUntrusted(t *testing.T) {
+	b := &Blocker{}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
+	b.blockIPs = []net.IP{net.ParseIP("9.9.9.9")}
+
+	next := &nextHandler{}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 9.9.9.9")
+	rec := httptest.NewRecorder()
+
+	if err := b.ServeHTTP(rec, req, next); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if next.called {
+		t.Error("want next handler to NOT be called for blocked client IP from XFF")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", rec.Code)
+	}
+}
+
+func TestServeHTTP_indeterminateClientIP_failOpenByDefault(t *testing.T) {
+	b := &Blocker{}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
+
+	next := &nextHandler{}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+
+	if err := b.ServeHTTP(rec, req, next); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !next.called {
+		t.Error("want next handler called when client IP is indeterminate and fail_closed is false")
+	}
+}
+
+func TestServeHTTP_indeterminateClientIP_failClosed(t *testing.T) {
+	b := &Blocker{FailClosed: true}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
+
+	next := &nextHandler{}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+
+	if err := b.ServeHTTP(rec, req, next); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if next.called {
+		t.Error("want next handler to NOT be called when client IP is indeterminate and fail_closed is true")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("want 403, got %d", rec.Code)
+	}
+}
+
 func TestServeHTTP_customStatusAndBody(t *testing.T) {
 	b := &Blocker{
 		ResponseStatus: 451,

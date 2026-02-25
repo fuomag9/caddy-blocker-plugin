@@ -76,6 +76,7 @@ The plugin is configured as a JSON handler with the name `"blocker"` inside a Ca
   "allow_ips":         ["1.2.3.4"],
 
   "trusted_proxies":   ["127.0.0.1", "10.0.0.0/8"],
+  "fail_closed":       false,
 
   "response_status":   403,
   "response_body":     "<h1>Access Denied</h1>",
@@ -101,6 +102,7 @@ The plugin is configured as a JSON handler with the name `"blocker"` inside a Ca
 | `allow_cidrs` | []string | — | CIDR ranges to allow (wins over block rules) |
 | `allow_ips` | []string | — | Individual IPs to allow (wins over block rules) |
 | `trusted_proxies` | []string | — | IPs or CIDRs of trusted reverse proxies for `X-Forwarded-For` |
+| `fail_closed` | bool | `false` | If `true`, block requests when client IP cannot be determined from trusted proxy headers |
 | `response_status` | int | `403` | HTTP status code for blocked responses |
 | `response_body` | string | `"Forbidden"` | Response body for blocked responses (plain text or HTML) |
 | `response_headers` | map[string]string | — | Extra headers added to blocked responses |
@@ -112,10 +114,11 @@ The plugin is configured as a JSON handler with the name `"blocker"` inside a Ca
 
 For every request:
 
-1. **Extract client IP** from `RemoteAddr`. If the direct connection comes from a `trusted_proxies` address, the leftmost non-trusted IP in `X-Forwarded-For` is used instead.
-2. **Check allow rules** — if any allow rule matches, the request passes immediately to the next handler (block rules are not evaluated).
-3. **Check block rules** — if any block rule matches, the configured block response is returned.
-4. **Default** — no rules matched, request passes through.
+1. **Extract client IP** from `RemoteAddr`. If the direct connection comes from a `trusted_proxies` address, `X-Forwarded-For` is parsed from right to left and the nearest non-trusted IP is used.
+2. **Indeterminate client IP** — if no usable client IP is found, requests pass through by default; set `fail_closed: true` to block instead.
+3. **Check allow rules** — if any allow rule matches, the request passes immediately to the next handler (block rules are not evaluated).
+4. **Check block rules** — if any block rule matches, the configured block response is returned.
+5. **Default** — no rules matched, request passes through.
 
 ---
 
@@ -203,7 +206,7 @@ For every request:
 
 ## Behind a reverse proxy
 
-Set `trusted_proxies` to the IP(s) or CIDR(s) of your upstream proxy (e.g. nginx, Cloudflare, a load balancer). The plugin will then read the real client IP from `X-Forwarded-For` instead of the proxy's address.
+Set `trusted_proxies` to the IP(s) or CIDR(s) of your upstream proxy (e.g. nginx, Cloudflare, a load balancer). The plugin then resolves client IP from `X-Forwarded-For` by walking from right to left and picking the first non-trusted hop, which is safer when upstream proxies append to existing headers.
 
 Both plain IPs and CIDR notation are accepted:
 

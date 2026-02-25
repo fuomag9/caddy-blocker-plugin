@@ -59,7 +59,7 @@ func parseMixedIPsAndCIDRs(entries []string) ([]*net.IPNet, []net.IP, error) {
 }
 
 // extractClientIP returns the best-effort real client IP for the request.
-// If RemoteAddr is from a trusted proxy, it walks X-Forwarded-For left-to-right
+// If RemoteAddr is from a trusted proxy, it walks X-Forwarded-For right-to-left
 // and returns the first IP that is not itself a trusted proxy.
 // Returns nil if the client IP is indeterminate (fail-open).
 func (b *Blocker) extractClientIP(r *http.Request) net.IP {
@@ -72,13 +72,9 @@ func (b *Blocker) extractClientIP(r *http.Request) net.IP {
 	if b.isTrustedProxy(remoteIP) {
 		xff := r.Header.Get("X-Forwarded-For")
 		if xff != "" {
-			for _, part := range strings.Split(xff, ",") {
-				// Handle optional port in XFF entries (some proxy implementations include it)
-				candidate := strings.TrimSpace(part)
-				if h, _, e := net.SplitHostPort(candidate); e == nil {
-					candidate = h
-				}
-				ip := net.ParseIP(candidate)
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				ip := parseForwardedIP(parts[i])
 				if ip != nil && !b.isTrustedProxy(ip) {
 					return ip
 				}
@@ -89,6 +85,20 @@ func (b *Blocker) extractClientIP(r *http.Request) net.IP {
 		return nil
 	}
 	return remoteIP
+}
+
+func parseForwardedIP(part string) net.IP {
+	candidate := strings.TrimSpace(part)
+	if candidate == "" {
+		return nil
+	}
+	if ip := net.ParseIP(candidate); ip != nil {
+		return ip
+	}
+	if h, _, err := net.SplitHostPort(candidate); err == nil {
+		return net.ParseIP(h)
+	}
+	return nil
 }
 
 // isTrustedProxy reports whether ip matches any entry in trustedIPs or trustedCIDRs.

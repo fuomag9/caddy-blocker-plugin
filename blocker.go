@@ -34,6 +34,7 @@ type Blocker struct {
 	AllowCIDRs      []string          `json:"allow_cidrs,omitempty"`
 	AllowIPs        []string          `json:"allow_ips,omitempty"`
 	TrustedProxies  []string          `json:"trusted_proxies,omitempty"`
+	FailClosed      bool              `json:"fail_closed,omitempty"`
 	ResponseStatus  int               `json:"response_status,omitempty"`
 	ResponseBody    string            `json:"response_body,omitempty"`
 	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
@@ -168,6 +169,10 @@ func (b *Blocker) Cleanup() error {
 // passes to the next handler regardless of any block rules.
 func (b *Blocker) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP := b.extractClientIP(r)
+	if clientIP == nil && b.FailClosed {
+		b.writeBlockResponse(w, r)
+		return nil
+	}
 
 	if b.isAllowed(clientIP) {
 		return next.ServeHTTP(w, r)

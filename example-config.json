@@ -19,6 +19,7 @@
                   "allow_ips": ["1.2.3.4"],
                   "allow_cidrs": ["10.0.0.0/8"],
                   "trusted_proxies": ["127.0.0.1"],
+                  "fail_closed": false,
                   "response_status": 403,
                   "response_body": "<h1>Access Denied</h1>",
                   "response_headers": {

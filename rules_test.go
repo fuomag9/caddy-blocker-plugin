@@ -80,6 +80,22 @@ func TestExtractClientIP_trustedProxyXFF(t *testing.T) {
 	}
 }
 
+func TestExtractClientIP_trustedProxyXFF_rightToLeft(t *testing.T) {
+	b := &Blocker{}
+	b.trustedIPs = []net.IP{net.ParseIP("127.0.0.1")}
+
+	// A client can spoof the left side of XFF when proxies append; we must use
+	// the nearest untrusted hop from the right.
+	r := &http.Request{
+		RemoteAddr: "127.0.0.1:1234",
+		Header:     http.Header{"X-Forwarded-For": []string{"1.2.3.4, 9.9.9.9"}},
+	}
+	ip := b.extractClientIP(r)
+	if !ip.Equal(net.ParseIP("9.9.9.9")) {
+		t.Errorf("want 9.9.9.9 from right-to-left parse, got %v", ip)
+	}
+}
+
 func TestExtractClientIP_noXFFHeader(t *testing.T) {
 	// Trusted proxy but no XFF header — client IP is indeterminate, return nil
 	b := &Blocker{}

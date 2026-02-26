@@ -98,6 +98,11 @@ type Blocker struct {
 	// redirect to this URL instead of the status/body/headers response.
 	RedirectURL string `json:"redirect_url,omitempty"`
 
+	// DisableLogging suppresses the INFO log entry that is emitted whenever a
+	// request is blocked. Logging is enabled by default; set this to true to
+	// silence block events (e.g. to reduce noise in high-traffic environments).
+	DisableLogging bool `json:"disable_logging,omitempty"`
+
 	// --- Compiled state (set by Provision, not exported) ---
 	logger       *zap.Logger
 	geoipDB      countryReader
@@ -232,6 +237,15 @@ func (b *Blocker) Cleanup() error {
 func (b *Blocker) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP := b.extractClientIP(r)
 	if clientIP == nil && b.FailClosed {
+		if !b.DisableLogging && b.logger != nil {
+			b.logger.Info("request blocked",
+				zap.String("plugin", "caddy-blocker"),
+				zap.String("reason", "fail_closed"),
+				zap.String("remote_addr", r.RemoteAddr),
+				zap.String("method", r.Method),
+				zap.String("uri", r.RequestURI),
+			)
+		}
 		b.writeBlockResponse(w, r)
 		return nil
 	}
@@ -241,6 +255,16 @@ func (b *Blocker) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	}
 
 	if b.isBlocked(clientIP) {
+		if !b.DisableLogging && b.logger != nil {
+			b.logger.Info("request blocked",
+				zap.String("plugin", "caddy-blocker"),
+				zap.String("reason", "block_rule"),
+				zap.String("client_ip", clientIP.String()),
+				zap.String("remote_addr", r.RemoteAddr),
+				zap.String("method", r.Method),
+				zap.String("uri", r.RequestURI),
+			)
+		}
 		b.writeBlockResponse(w, r)
 		return nil
 	}

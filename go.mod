@@ -3,7 +3,7 @@ module github.com/fuomag9/caddy-blocker-plugin
 go 1.26
 
 require (
-	github.com/caddyserver/caddy/v2 v2.11.1
+	github.com/caddyserver/caddy/v2 v2.11.2
 	github.com/oschwald/geoip2-golang v1.13.0
 	go.uber.org/zap v1.27.1
 )

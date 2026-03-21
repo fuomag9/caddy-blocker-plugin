@@ -9,13 +9,15 @@ import (
 
 func TestValidate_validConfig(t *testing.T) {
 	b := &Blocker{
-		BlockCountries:  []string{"CN", "RU"},
-		BlockContinents: []string{"AS"},
-		BlockASNs:       []uint{12345},
-		BlockCIDRs:      []string{"10.0.0.0/8"},
-		BlockIPs:        []string{"1.2.3.4"},
-		AllowIPs:        []string{"5.6.7.8"},
-		ResponseStatus:  403,
+		BlockerCore: BlockerCore{
+			BlockCountries:  []string{"CN", "RU"},
+			BlockContinents: []string{"AS"},
+			BlockASNs:       []uint{12345},
+			BlockCIDRs:      []string{"10.0.0.0/8"},
+			BlockIPs:        []string{"1.2.3.4"},
+			AllowIPs:        []string{"5.6.7.8"},
+		},
+		ResponseStatus: 403,
 	}
 	if err := b.Validate(); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -23,14 +25,14 @@ func TestValidate_validConfig(t *testing.T) {
 }
 
 func TestValidate_invalidCountryCode(t *testing.T) {
-	b := &Blocker{BlockCountries: []string{"china"}}
+	b := &Blocker{BlockerCore: BlockerCore{BlockCountries: []string{"china"}}}
 	if err := b.Validate(); err == nil {
 		t.Error("expected error for invalid country code")
 	}
 }
 
 func TestValidate_invalidContinentCode(t *testing.T) {
-	b := &Blocker{BlockContinents: []string{"XX"}}
+	b := &Blocker{BlockerCore: BlockerCore{BlockContinents: []string{"XX"}}}
 	if err := b.Validate(); err == nil {
 		t.Error("expected error for invalid continent code")
 	}
@@ -44,7 +46,7 @@ func TestValidate_invalidResponseStatus(t *testing.T) {
 }
 
 func TestValidate_zeroASN(t *testing.T) {
-	b := &Blocker{BlockASNs: []uint{0}}
+	b := &Blocker{BlockerCore: BlockerCore{BlockASNs: []uint{0}}}
 	if err := b.Validate(); err == nil {
 		t.Error("expected error for ASN = 0")
 	}

@@ -5,11 +5,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
-	"github.com/oschwald/geoip2-golang"
 	"go.uber.org/zap"
 )
 
@@ -26,42 +24,7 @@ func init() {
 // If a database is missing or unreadable, the corresponding rule types are
 // silently skipped (fail-open) and all other rules continue to apply.
 type Blocker struct {
-	// GeoIPDBPath is the path to a MaxMind GeoLite2-Country, GeoLite2-City,
-	// GeoIP2-Country, or GeoIP2-City .mmdb file. Required for block_countries
-	// and block_continents / allow_countries and allow_continents rules.
-	GeoIPDBPath string `json:"geoip_db,omitempty"`
-
-	// ASNDBPath is the path to a MaxMind GeoLite2-ASN or GeoIP2-ASN .mmdb
-	// file. Required for block_asns / allow_asns rules.
-	ASNDBPath string `json:"asn_db,omitempty"`
-
-	// BlockCountries lists ISO 3166-1 alpha-2 country codes whose traffic
-	// should be blocked (e.g. ["CN", "RU", "KP"]).
-	BlockCountries []string `json:"block_countries,omitempty"`
-
-	// BlockContinents lists MaxMind continent codes whose traffic should be
-	// blocked. Valid values: AF, AN, AS, EU, NA, OC, SA.
-	BlockContinents []string `json:"block_continents,omitempty"`
-
-	// BlockASNs lists Autonomous System Numbers whose traffic should be blocked.
-	BlockASNs []uint `json:"block_asns,omitempty"`
-
-	// BlockCIDRs lists CIDR ranges whose traffic should be blocked
-	// (e.g. ["192.0.2.0/24", "2001:db8::/32"]).
-	BlockCIDRs []string `json:"block_cidrs,omitempty"`
-
-	// BlockIPs lists individual IP addresses to block.
-	BlockIPs []string `json:"block_ips,omitempty"`
-
-	// AllowCountries, AllowContinents, AllowASNs, AllowCIDRs, AllowIPs mirror
-	// their Block counterparts but grant access. Allow rules are evaluated
-	// before block rules — a matching allow rule always passes the request
-	// through, regardless of any block rules that would otherwise match.
-	AllowCountries  []string `json:"allow_countries,omitempty"`
-	AllowContinents []string `json:"allow_continents,omitempty"`
-	AllowASNs       []uint   `json:"allow_asns,omitempty"`
-	AllowCIDRs      []string `json:"allow_cidrs,omitempty"`
-	AllowIPs        []string `json:"allow_ips,omitempty"`
+	BlockerCore
 
 	// TrustedProxies lists IPs or CIDRs of trusted reverse proxies
 	// (e.g. ["127.0.0.1", "10.0.0.0/8"]). When the direct connection arrives
@@ -98,19 +61,7 @@ type Blocker struct {
 	// redirect to this URL instead of the status/body/headers response.
 	RedirectURL string `json:"redirect_url,omitempty"`
 
-	// DisableLogging suppresses the INFO log entry that is emitted whenever a
-	// request is blocked. Logging is enabled by default; set this to true to
-	// silence block events (e.g. to reduce noise in high-traffic environments).
-	DisableLogging bool `json:"disable_logging,omitempty"`
-
-	// --- Compiled state (set by Provision, not exported) ---
-	logger       *zap.Logger
-	geoipDB      countryReader
-	asnDB        asnReader
-	blockCIDRs   []*net.IPNet
-	allowCIDRs   []*net.IPNet
-	blockIPs     []net.IP
-	allowIPs     []net.IP
+	// --- Compiled HTTP-specific state (set by Provision, not exported) ---
 	trustedCIDRs []*net.IPNet
 	trustedIPs   []net.IP
 }
@@ -126,37 +77,11 @@ func (Blocker) CaddyModule() caddy.ModuleInfo {
 // Provision implements caddy.Provisioner. It opens the MaxMind databases and
 // pre-compiles all CIDR and IP strings for fast per-request matching.
 func (b *Blocker) Provision(ctx caddy.Context) error {
-	b.logger = ctx.Logger(b)
-
-	if b.GeoIPDBPath != "" {
-		r, err := geoip2.Open(b.GeoIPDBPath)
-		if err != nil {
-			b.logger.Warn("failed to open geoip_db; country/continent rules disabled",
-				zap.String("path", b.GeoIPDBPath), zap.Error(err))
-		} else {
-			b.geoipDB = r
-		}
-	}
-
-	if b.ASNDBPath != "" {
-		r, err := geoip2.Open(b.ASNDBPath)
-		if err != nil {
-			b.logger.Warn("failed to open asn_db; ASN rules disabled",
-				zap.String("path", b.ASNDBPath), zap.Error(err))
-		} else {
-			b.asnDB = r
-		}
+	if err := b.BlockerCore.Provision(ctx); err != nil {
+		return err
 	}
 
 	var err error
-	b.blockCIDRs, b.blockIPs, err = compileCIDRsAndIPs(b.BlockCIDRs, b.BlockIPs)
-	if err != nil {
-		return fmt.Errorf("block rules: %w", err)
-	}
-	b.allowCIDRs, b.allowIPs, err = compileCIDRsAndIPs(b.AllowCIDRs, b.AllowIPs)
-	if err != nil {
-		return fmt.Errorf("allow rules: %w", err)
-	}
 	b.trustedCIDRs, b.trustedIPs, err = parseMixedIPsAndCIDRs(b.TrustedProxies)
 	if err != nil {
 		return fmt.Errorf("trusted_proxies: %w", err)
@@ -165,15 +90,12 @@ func (b *Blocker) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-var countryCodeRe = regexp.MustCompile(`^[A-Z]{2}$`)
-
-var validContinents = map[string]bool{
-	"AF": true, "AN": true, "AS": true,
-	"EU": true, "NA": true, "OC": true, "SA": true,
-}
-
 // Validate implements caddy.Validator. It checks config values for correctness.
 func (b *Blocker) Validate() error {
+	if err := b.BlockerCore.Validate(); err != nil {
+		return err
+	}
+
 	if b.RedirectURL != "" {
 		if _, err := url.ParseRequestURI(b.RedirectURL); err != nil {
 			return fmt.Errorf("invalid redirect_url %q: %w", b.RedirectURL, err)
@@ -184,46 +106,10 @@ func (b *Blocker) Validate() error {
 		return fmt.Errorf("response_status must be 100-599, got %d", b.ResponseStatus)
 	}
 
-	for _, c := range append(b.BlockCountries, b.AllowCountries...) {
-		if !countryCodeRe.MatchString(c) {
-			return fmt.Errorf("invalid country code %q (must be 2 uppercase letters, e.g. \"US\")", c)
-		}
-	}
-
-	for _, c := range append(b.BlockContinents, b.AllowContinents...) {
-		if !validContinents[c] {
-			return fmt.Errorf("invalid continent code %q (must be one of AF, AN, AS, EU, NA, OC, SA)", c)
-		}
-	}
-
-	for _, asn := range append(b.BlockASNs, b.AllowASNs...) {
-		if asn == 0 {
-			return fmt.Errorf("ASN numbers must be > 0")
-		}
-	}
-
-	// Validate CIDR and IP strings in block/allow rules
-	if _, _, err := compileCIDRsAndIPs(b.BlockCIDRs, b.BlockIPs); err != nil {
-		return fmt.Errorf("block rules: %w", err)
-	}
-	if _, _, err := compileCIDRsAndIPs(b.AllowCIDRs, b.AllowIPs); err != nil {
-		return fmt.Errorf("allow rules: %w", err)
-	}
 	if _, _, err := parseMixedIPsAndCIDRs(b.TrustedProxies); err != nil {
 		return fmt.Errorf("trusted_proxies: %w", err)
 	}
 
-	return nil
-}
-
-// Cleanup implements caddy.CleanerUpper. It closes the MaxMind database handles.
-func (b *Blocker) Cleanup() error {
-	if r, ok := b.geoipDB.(*geoip2.Reader); ok && r != nil {
-		_ = r.Close()
-	}
-	if r, ok := b.asnDB.(*geoip2.Reader); ok && r != nil {
-		_ = r.Close()
-	}
 	return nil
 }
 

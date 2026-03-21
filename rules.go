@@ -136,25 +136,25 @@ func (b *Blocker) isTrustedProxy(ip net.IP) bool {
 
 // isAllowed reports whether ip matches any allow rule.
 // An allow match causes the request to pass immediately (bypasses block rules).
-func (b *Blocker) isAllowed(ip net.IP) bool {
-	return b.matchesRules(ip,
-		b.allowIPs, b.allowCIDRs,
-		b.AllowASNs, b.AllowCountries, b.AllowContinents,
+func (c *BlockerCore) isAllowed(ip net.IP) bool {
+	return c.matchesRules(ip,
+		c.allowIPs, c.allowCIDRs,
+		c.AllowASNs, c.AllowCountries, c.AllowContinents,
 	)
 }
 
 // isBlocked reports whether ip matches any block rule.
-func (b *Blocker) isBlocked(ip net.IP) bool {
-	return b.matchesRules(ip,
-		b.blockIPs, b.blockCIDRs,
-		b.BlockASNs, b.BlockCountries, b.BlockContinents,
+func (c *BlockerCore) isBlocked(ip net.IP) bool {
+	return c.matchesRules(ip,
+		c.blockIPs, c.blockCIDRs,
+		c.BlockASNs, c.BlockCountries, c.BlockContinents,
 	)
 }
 
 // matchesRules checks ip against compiled IP/CIDR lists, ASN numbers,
 // country codes, and continent codes. Returns true on the first match.
 // If a required DB reader is nil, those rule types are skipped (fail-open).
-func (b *Blocker) matchesRules(
+func (c *BlockerCore) matchesRules(
 	ip net.IP,
 	ips []net.IP,
 	cidrs []*net.IPNet,
@@ -181,8 +181,8 @@ func (b *Blocker) matchesRules(
 	}
 
 	// ASN match (requires asnDB)
-	if len(asns) > 0 && b.asnDB != nil {
-		if record, err := b.asnDB.ASN(ip); err == nil {
+	if len(asns) > 0 && c.asnDB != nil {
+		if record, err := c.asnDB.ASN(ip); err == nil {
 			for _, asn := range asns {
 				if uint(record.AutonomousSystemNumber) == asn {
 					return true
@@ -192,8 +192,8 @@ func (b *Blocker) matchesRules(
 	}
 
 	// Country / continent match (requires geoipDB)
-	if (len(countries) > 0 || len(continents) > 0) && b.geoipDB != nil {
-		if record, err := b.geoipDB.Country(ip); err == nil {
+	if (len(countries) > 0 || len(continents) > 0) && c.geoipDB != nil {
+		if record, err := c.geoipDB.Country(ip); err == nil {
 			for _, country := range countries {
 				if record.Country.IsoCode == country {
 					return true
